@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.callerview</groupId>
+    <artifactId>callerView</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <name>CallerView</name>
+    <description>IntelliJ IDEA plugin to analyze and visualize method caller chains.</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>1.8</maven.compiler.source>
+        <maven.compiler.target>1.8</maven.compiler.target>
+        <!--
+            IntelliJ Platform build number of the 2020.3 branch (last platform shipping a JBR 8).
+            Verified to exist for BOTH com.jetbrains.intellij.platform:core and com.jetbrains.intellij.java.
+            Source/target = 1.8, so the resulting bytecode runs on every IDE from 2020.3 up to 2026.x.
+        -->
+        <intellij.version>203.7148.57</intellij.version>
+    </properties>
+
+    <repositories>
+        <repository>
+            <id>jetbrains-intellij-repository</id>
+            <url>https://www.jetbrains.com/intellij-repository/releases</url>
+        </repository>
+        <repository>
+            <id>jetbrains-intellij-dependencies</id>
+            <url>https://cache-redirector.jetbrains.com/intellij-dependencies</url>
+        </repository>
+        <repository>
+            <id>central</id>
+            <url>https://repo.maven.apache.org/maven2</url>
+        </repository>
+    </repositories>
+
+    <dependencies>
+        <!-- Platform core (openapi, util, ui, wm, progress, icons ...). Provided by the IDE at runtime. -->
+        <!-- com.jetbrains.rd:* are pulled transitively by core's POM but not resolvable from public
+             repos; we never reference RD classes, so they are excluded to keep the build green. -->
+        <dependency>
+            <groupId>com.jetbrains.intellij.platform</groupId>
+            <artifactId>core</artifactId>
+            <version>${intellij.version}</version>
+            <scope>provided</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.jetbrains.rd</groupId>
+                    <artifactId>rd-core</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.jetbrains.rd</groupId>
+                    <artifactId>rd-framework</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.jetbrains.rd</groupId>
+                    <artifactId>rd-swing</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <!-- Java plugin (PsiMethod, MethodReferencesSearch ...). Required for call hierarchy. -->
+        <dependency>
+            <groupId>com.jetbrains.intellij.java</groupId>
+            <artifactId>java</artifactId>
+            <version>${intellij.version}</version>
+            <scope>provided</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.jetbrains.rd</groupId>
+                    <artifactId>rd-core</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.jetbrains.rd</groupId>
+                    <artifactId>rd-framework</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.jetbrains.rd</groupId>
+                    <artifactId>rd-swing</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!-- The plugin jar is shipped as lib/CallerView.jar inside the distribution zip. -->
+        <finalName>CallerView</finalName>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+            </resource>
+        </resources>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.8.1</version>
+                <configuration>
+                    <source>1.8</source>
+                    <target>1.8</target>
+                    <encoding>UTF-8</encoding>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.2.0</version>
+                <configuration>
+                    <archive>
+                        <addMavenDescriptor>false</addMavenDescriptor>
+                    </archive>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.3.0</version>
+                <configuration>
+                    <finalName>CallerView-${project.version}</finalName>
+                    <appendAssemblyId>false</appendAssemblyId>
+                    <descriptors>
+                        <descriptor>src/assembly/plugin.xml</descriptor>
+                    </descriptors>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>make-plugin-zip</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

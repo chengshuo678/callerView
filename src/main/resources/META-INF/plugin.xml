@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<idea-plugin>
+    <id>com.callerview.plugin</id>
+    <name>CallerView</name>
+    <vendor email="callerview@example.com" url="https://github.com/callerview">CallerView</vendor>
+    <version>1.0.0</version>
+
+    <description><![CDATA[
+        <h3>CallerView</h3>
+        Analyze and visualize the <b>caller</b> chain of any Java/Kotlin method.<br/>
+        Right-click a method in the editor and choose <i>CallerView: Show Call Chain</i>.
+        <ul>
+          <li>Configurable upward depth (default -1 = all levels)</li>
+          <li>Configurable core methods &mdash; any chain affecting a core method is highlighted in red</li>
+          <li>Clear graph view (zoom / pan) + a side tree panel</li>
+          <li>Installable locally or from the JetBrains Marketplace</li>
+        </ul>
+    ]]></description>
+
+    <change-notes><![CDATA[
+        <b>1.0.0</b><br/>Initial release.
+    ]]></change-notes>
+
+    <!-- 203 = IntelliJ 2020.3 (last Java 8 platform). No until-build => forward compatible. -->
+    <idea-version since-build="203"/>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Settings | Tools | CallerView -->
+        <applicationConfigurable
+                parentId="tools"
+                id="tools.callerview"
+                displayName="CallerView"
+                instance="com.callerview.config.CallerViewConfigurable"/>
+        <applicationService
+                serviceImplementation="com.callerview.config.CallerViewSettings"/>
+        <projectService
+                serviceImplementation="com.callerview.toolwindow.CallChainViewService"/>
+        <toolWindow id="CallerView"
+                    anchor="bottom"
+                    factoryClass="com.callerview.toolwindow.CallChainToolWindowFactory"/>
+    </extensions>
+
+    <actions>
+        <action id="CallerView.ShowCallChain"
+                class="com.callerview.action.ShowCallChainAction"
+                text="CallerView: Show Call Chain"
+                description="Analyze the callers of the method at the caret">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

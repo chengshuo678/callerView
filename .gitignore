@@ -1,0 +1,16 @@
+# --- build output ---
+target/
+
+# --- stray compiled classes at repo root (src/main/java/com is tracked) ---
+/com/
+
+# --- compiled classes ---
+*.class
+
+# --- stray duplicate of src/main/resources/icons/callChain.svg ---
+/icons/
+
+# --- IDE ---
+.idea/
+*.iml
+out/
