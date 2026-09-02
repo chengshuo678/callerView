@@ -88,7 +88,9 @@ public class CallerViewSettings implements PersistentStateComponent<CallerViewSe
         }
         String id = node.getShortId();
         String full = node.getSignature();
-        String shortSig = id + full.substring(full.indexOf('('));
+        // Synthetic <clinit>/<init> nodes have signatures without a parameter list.
+        int open = full.indexOf('(');
+        String shortSig = open >= 0 ? id + full.substring(open) : id;
         for (String e : methods) {
             if (e == null) {
                 continue;

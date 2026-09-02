@@ -10,7 +10,13 @@
         <file>
             <!-- The jar built by maven-jar-plugin (finalName = CallerView). -->
             <source>${project.build.directory}/${project.build.finalName}.jar</source>
-            <outputDirectory>lib</outputDirectory>
+            <!-- The zip MUST contain a single top-level folder named after the plugin:
+                 CallerView/lib/CallerView.jar
+                 IDEA (PluginDescriptorLoader.loadDescriptorFromArtifact) takes the first
+                 top-level entry of the zip as the plugin dir. Without the wrapping
+                 CallerView/ folder it picks "lib" and fails with
+                 "Fail to load plugin descriptor from file". -->
+            <outputDirectory>CallerView/lib</outputDirectory>
             <destName>CallerView.jar</destName>
         </file>
     </files>

@@ -28,7 +28,7 @@ IntelliJ IDEA 插件：分析并可视化一个 Java 方法的 **被调用链路
 ```
 callerView/
 ├── pom.xml
-├── src/assembly/plugin.xml                 # 把 target/CallerView.jar 打成 lib/CallerView.jar 的 zip
+├── src/assembly/plugin.xml                 # 把 target/CallerView.jar 打成 CallerView/lib/CallerView.jar 的 zip
 └── src/main/
     ├── resources/
     │   ├── META-INF/
@@ -58,11 +58,15 @@ mvn clean package
 产物：
 
 - `target/CallerView.jar`（插件本体，内含 `META-INF/plugin.xml` 与图标）
-- `target/CallerView-1.0.0.zip`（可直接安装的分发包，结构为 `lib/CallerView.jar`）
+- `target/CallerView-1.0.0.zip`（可直接安装的分发包，结构为 `CallerView/lib/CallerView.jar`）
+
+> zip 必须带顶层 `CallerView/` 目录：IDEA 安装时把 zip 的第一个顶层条目当作插件目录，
+> 缺少该目录会报 “Fail to load plugin descriptor from file”。
 
 > 若编译期出现“package xxx does not exist”，说明个别类所在平台模块未被 `core`/`java` 传递引入，
 > 可在 `pom.xml` 的 `<dependencies>` 中补一个模块构件（坐标规则见
 > [IntelliJ Artifacts 文档](https://plugins.jetbrains.com/docs/intellij/intellij-artifacts.html)），例如：
+>
 > ```xml
 > <dependency>
 >   <groupId>com.jetbrains.intellij.platform</groupId>
@@ -75,11 +79,14 @@ mvn clean package
 ## 安装
 
 ### 本地安装
+
 `File | Settings | Plugins | ⚙ | Install Plugin from Disk…` → 选择 `target/CallerView-1.0.0.zip` → 重启 IDE。
 
 ### 从插件市场安装
+
 将 `CallerView-1.0.0.zip`（或签名后的发布包）上传到
 [JetBrains Marketplace](https://plugins.jetbrains.com/)。上架需：
+
 1. 在 [账户](https://plugins.jetbrains.com/author/me) 生成插件签名密钥对；
 2. （可选）配置签名证书后用 Maven 重新打包，或在 Marketplace 上完成双重签名。
 
@@ -95,7 +102,9 @@ mvn clean package
 
 ## 说明与限制
 
-- 调用者检索范围为**工程源码**（`GlobalSearchScope.projectScope`，含测试源）；三方库内部对方法的调用不在链路内。
+- 调用者检索范围为**工程源码**（`GlobalSearchScope.projectScope`，含测试源）；
 - 循环（含直接/间接递归）按分支打破，同一方法可在不同分支重复出现以保留完整路径信息。
 - 默认 `-1` 表示无限层级，受安全节点上限 20000 保护；超大调用图建议显式设置层级。
 - 存储的 `PsiMethod` 用于双击跳转，PSI 变更后若失效会自动忽略跳转。
+- **无法覆盖的场景（静态分析的固有限制）**：反射调用、XML/配置文件驱动的框架调用（Spring、MyBatis 等）、二进制依赖库内部发起的回调（搜索范围是项目源码）、以及动态分发导致的歧义（接口调用具体走哪个实现只在运行时确定）。
+

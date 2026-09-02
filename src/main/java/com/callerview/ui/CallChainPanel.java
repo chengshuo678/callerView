@@ -128,7 +128,23 @@ public class CallChainPanel extends JPanel {
             return;
         }
         int count = countNodes(root);
-        infoLabel.setText("目标: " + root.getShortId() + "    节点数: " + count);
+        String text = "目标: " + root.getShortId() + "    节点数: " + count;
+        if (hasTruncated(root)) {
+            text += "    （部分调用链因深度/规模限制被截断）";
+        }
+        infoLabel.setText(text);
+    }
+
+    private static boolean hasTruncated(CallNode node) {
+        if (node.isTruncated()) {
+            return true;
+        }
+        for (CallNode child : node.getChildren()) {
+            if (hasTruncated(child)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static int countNodes(CallNode node) {
