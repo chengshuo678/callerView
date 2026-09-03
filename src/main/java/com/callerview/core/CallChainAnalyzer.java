@@ -2,6 +2,7 @@ package com.callerview.core;
 
 import com.callerview.config.CallerViewSettings;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.progress.ProcessCanceledException;
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
@@ -34,11 +35,48 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Builds the caller-chain tree for a target {@link PsiMethod} and annotates nodes/edges
  * so the UI can highlight chains that affect a configured "core" method.
  *
+ * <h3>Performance model</h3>
+ * <p>The tree is grown level by level (breadth-first): the expensive part — finding the
+ * callers of every frontier method, i.e. running {@link MethodReferencesSearch} /
+ * {@link ClassInheritorsSearch} — is embarrassingly parallel, because frontier methods are
+ * independent of each other. The search work for one level is split into chunks and executed
+ * by a small fixed thread pool ({@link #MAX_WORKER_THREADS} threads max, see below); wiring
+ * the found callers into the tree (cycle check, dedupe, caps) is cheap and stays on the
+ * orchestrator thread. Levels with a single chunk run inline, so narrow chains pay no
+ * thread hand-off at all.</p>
+ *
+ * <p>Space is traded for time in two caches: caller lists are memoised per method signature
+ * (the same method typically appears at many tree positions — diamond-shaped call graphs —
+ * and is then searched only once), and the "core method" match is memoised per signature.</p>
+ *
+ * <p>Each frontier item takes its own short read action instead of holding one read lock for
+ * the whole analysis. This is required for the parallel design to be safe: the orchestrator
+ * must not hold a read lock while waiting for workers (a pending write action between them
+ * would block the workers' read actions and deadlock the analysis), and short read actions
+ * also let the IDE process user edits between chunks instead of freezing. Because writes can
+ * now interleave with the analysis, every cached {@code PsiMethod} is re-validated with
+ * {@code isValid()} before use.</p>
+ *
+ * <p>Worker count: {@code min(availableProcessors, 8)}. Index-backed searches scale
+ * sub-linearly with threads (shared index read locks, read-action bookkeeping), and an
+ * oversized pool mainly inflates the latency of write actions waiting behind reads — which
+ * the user perceives as IDE stutter. Eight threads is where the throughput curve flattens
+ * on typical developer hardware.</p>
+ *
+ * <h3>Analysis semantics (unchanged by parallelism)</h3>
  * <p>Overloads are kept apart everywhere: references are searched with the platform's
  * <em>strict signature</em> mode (the non-strict fallback of {@link MethodReferencesSearch}
  * accepts any reference that resolves to a same-name method of the same class, regardless
@@ -55,20 +93,30 @@ import java.util.Set;
  * triggers (any static access) are too noisy. Javadoc, comment and annotation references are
  * skipped because they never execute.</p>
  *
- * <p>Cycles (direct, mutual and across overloads) are broken per-branch by signature. Depth is
- * additionally capped by {@link #MAX_ANALYSIS_DEPTH} so the recursive build — and the recursive
- * UI code that consumes the tree — can never overflow the thread stack, even with the depth
- * setting at -1 (unlimited).</p>
+ * <p>Cycles (direct, mutual and across overloads) are broken per-branch by signature, tracked
+ * through an immutable linked path (one small allocation per node) instead of copying a
+ * per-branch set. Depth is capped by {@link #MAX_ANALYSIS_DEPTH} so the recursive UI code
+ * that consumes the tree can never overflow the thread stack, even with the depth setting
+ * at -1 (unlimited).</p>
  */
 public class CallChainAnalyzer {
 
     /** Safety net so an "unlimited" analysis cannot freeze the IDE on pathological graphs. */
     private static final int SAFETY_NODE_CAP = 20000;
 
-    /** Hard ceiling on chain depth: protects the Java stack of the recursive build and UI. */
+    /** Hard ceiling on chain depth: protects the Java stack of the recursive UI code. */
     private static final int MAX_ANALYSIS_DEPTH = 1000;
 
+    /** Upper bound for the worker pool — see the performance model in the class javadoc. */
+    private static final int MAX_WORKER_THREADS = 8;
+
     private final @NotNull Project project;
+
+    // Per-analysis state (analyzer instances are created per run; analyze() resets anyway).
+    private final ConcurrentHashMap<String, List<CallerRef>> callerCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Boolean> coreCache = new ConcurrentHashMap<>();
+    private @Nullable ExecutorService pool;
+    private @Nullable ProgressIndicator indicator;
     private int nodeCount;
 
     public CallChainAnalyzer(@NotNull Project project) {
@@ -86,61 +134,192 @@ public class CallChainAnalyzer {
             }
             DumbService.getInstance(project).waitForSmartMode();
         }
-        return ApplicationManager.getApplication().runReadAction((Computable<CallNode>) () ->
-                build(CallerRef.of(target), 0, new HashSet<>(), indicator));
+        this.indicator = indicator;
+        this.nodeCount = 0;
+        this.callerCache.clear();
+        this.coreCache.clear();
+
+        CallerRef rootRef = ApplicationManager.getApplication().runReadAction((Computable<CallerRef>) () ->
+                target.isValid() ? CallerRef.of(target) : null);
+        if (rootRef == null) {
+            return null;
+        }
+
+        this.pool = Executors.newFixedThreadPool(workerThreads(), daemonFactory());
+        try {
+            return buildTree(rootRef);
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
-    private CallNode build(CallerRef target, int depth, Set<String> ancestors, ProgressIndicator indicator) {
-        if (indicator != null) {
-            indicator.checkCanceled();
+    // ---- level-parallel tree construction ----
+
+    private CallNode buildTree(CallerRef rootRef) {
+        int effectiveMax = effectiveMaxDepth();
+        CallNode rootNode = makeNode(rootRef, 0);
+        nodeCount = 1;
+
+        List<LevelItem> frontier = new ArrayList<>();
+        if (effectiveMax > 0) {
+            frontier.add(new LevelItem(rootNode, rootRef, new PathNode(rootRef.signature, null)));
+        } else {
+            rootNode.setTruncated(true);
         }
 
+        while (!frontier.isEmpty()) {
+            if (indicator != null) {
+                indicator.checkCanceled();
+                indicator.setText("CallerView: 深度 " + frontier.get(0).node.getDepth() + "，节点 " + nodeCount);
+            }
+            if (nodeCount >= SAFETY_NODE_CAP) {
+                for (LevelItem item : frontier) {
+                    item.node.setTruncated(true);
+                }
+                break;
+            }
+
+            List<List<CallerRef>> expansions = expandLevel(frontier);
+
+            List<LevelItem> next = new ArrayList<>();
+            for (int i = 0; i < frontier.size(); i++) {
+                wireChildren(frontier.get(i), expansions.get(i), effectiveMax, next);
+            }
+            frontier = next;
+        }
+        return rootNode;
+    }
+
+    /**
+     * Runs the caller search for every frontier item, spread over the worker pool.
+     * The frontier is split into {@code 4 x workers} chunks so a slow method (many
+     * references, big inheritor family) cannot leave a worker idle at the end of a level.
+     */
+    private List<List<CallerRef>> expandLevel(List<LevelItem> frontier) {
+        int chunks = Math.max(1, workerThreads() * 4);
+        int chunkSize = Math.max(1, (frontier.size() + chunks - 1) / chunks);
+
+        List<Callable<List<List<CallerRef>>>> tasks = new ArrayList<>();
+        for (int start = 0; start < frontier.size(); start += chunkSize) {
+            final List<LevelItem> chunk = frontier.subList(start, Math.min(start + chunkSize, frontier.size()));
+            tasks.add(() -> {
+                List<List<CallerRef>> out = new ArrayList<>(chunk.size());
+                for (LevelItem item : chunk) {
+                    checkWorkerCanceled();
+                    out.add(findCallersCached(item.ref));
+                }
+                return out;
+            });
+        }
+
+        // Narrow level (the common chain-shaped case): run on the calling thread, no pool hop.
+        if (tasks.size() == 1) {
+            try {
+                return tasks.get(0).call();
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        List<List<CallerRef>> result = new ArrayList<>(frontier.size());
+        try {
+            // invokeAll waits for every chunk and returns futures in task order.
+            for (Future<List<List<CallerRef>>> f : pool.invokeAll(tasks)) {
+                result.addAll(f.get());
+            }
+            return result;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ProcessCanceledException();
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            if (cause instanceof ProcessCanceledException) {
+                throw (ProcessCanceledException) cause;
+            }
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+            }
+            throw new RuntimeException(cause);
+        }
+    }
+
+    /** Cheap, sequential: attaches the found callers to one node (cycle / dedupe / caps). */
+    private void wireChildren(LevelItem item, List<CallerRef> callers, int effectiveMax, List<LevelItem> next) {
+        Set<String> seen = new HashSet<>();
+        for (CallerRef caller : callers) {
+            if (nodeCount >= SAFETY_NODE_CAP) {
+                item.node.setTruncated(true);
+                return;
+            }
+            if (indicator != null && indicator.isCanceled()) {
+                throw new ProcessCanceledException();
+            }
+            if (item.path.contains(caller.signature)) {
+                continue; // cycle (direct, mutual, or across overloads)
+            }
+            if (!seen.add(caller.signature)) {
+                continue; // the same caller found via several family members / call sites
+            }
+            CallNode child = makeNode(caller, item.node.getDepth() + 1);
+            item.node.addChild(child);
+            nodeCount++;
+            if (child.getDepth() < effectiveMax && nodeCount < SAFETY_NODE_CAP) {
+                next.add(new LevelItem(child, caller, new PathNode(caller.signature, item.path)));
+            } else {
+                child.setTruncated(true);
+            }
+        }
+    }
+
+    /**
+     * Memoised caller search. A method reached at several tree positions (diamond call
+     * graphs) is searched once; the cache key is the unique signature.
+     */
+    private List<CallerRef> findCallersCached(CallerRef target) {
+        List<CallerRef> cached = callerCache.get(target.signature);
+        if (cached != null) {
+            return cached;
+        }
+        List<CallerRef> computed = ApplicationManager.getApplication().runReadAction((Computable<List<CallerRef>>) () -> {
+            checkWorkerCanceled();
+            List<CallerRef> result = new ArrayList<>();
+            if (target.method != null) {
+                // Writes can interleave between levels (short read actions), so re-validate.
+                if (target.method.isValid()) {
+                    findMethodCallers(target.method, result);
+                }
+            } else if (target.ownerClass != null && "<init>".equals(target.name)) {
+                if (target.ownerClass.isValid()) {
+                    findInitializerCallers(target.ownerClass, result);
+                }
+            }
+            // <clinit> stays a leaf: triggered by any class access, which is too noisy to search.
+            return result;
+        });
+        List<CallerRef> previous = callerCache.putIfAbsent(target.signature, computed);
+        return previous != null ? previous : computed;
+    }
+
+    /** Node creation is PSI-free: all strings are precomputed on the {@link CallerRef}. */
+    private CallNode makeNode(CallerRef ref, int depth) {
         CallNode node = new CallNode(
                 depth,
-                target.name,
-                target.className,
-                target.fqn,
-                target.className + "." + target.name,
-                target.signature,
-                target.method,
+                ref.name,
+                ref.className,
+                ref.fqn,
+                ref.className + "." + ref.name,
+                ref.signature,
+                ref.method,
                 false
         );
-        node.setCore(CallerViewSettings.getInstance().isCore(node));
-        nodeCount++;
-
-        int max = CallerViewSettings.getInstance().getMaxDepth();
-        if (max < 0 || max > MAX_ANALYSIS_DEPTH) {
-            max = MAX_ANALYSIS_DEPTH;
-        }
-        boolean canExpand = depth < max && nodeCount < SAFETY_NODE_CAP;
-
-        if (canExpand) {
-            ancestors.add(target.signature); // current node is on the path for its callers
-            List<CallerRef> callers = findCallers(target);
-            Set<String> seen = new HashSet<>();
-            for (CallerRef caller : callers) {
-                if (!seen.add(caller.signature) || ancestors.contains(caller.signature)) {
-                    continue; // duplicate / cycle (direct, mutual, or across overloads)
-                }
-                node.addChild(build(caller, depth + 1, ancestors, indicator));
-            }
-            ancestors.remove(target.signature);
-        } else {
-            node.setTruncated(true);
-        }
+        node.setCore(coreCache.computeIfAbsent(ref.signature, key ->
+                CallerViewSettings.getInstance().isCore(node)));
         return node;
     }
 
-    private List<CallerRef> findCallers(CallerRef target) {
-        List<CallerRef> result = new ArrayList<>();
-        if (target.method != null) {
-            findMethodCallers(target.method, result);
-        } else if (target.ownerClass != null && "<init>".equals(target.name)) {
-            findInitializerCallers(target.ownerClass, result);
-        }
-        // <clinit> stays a leaf: it is triggered by any class access, which is too noisy to search.
-        return result;
-    }
+    // ---- caller search (PSI work, runs inside a read action on a worker thread) ----
 
     private void findMethodCallers(PsiMethod method, List<CallerRef> result) {
         GlobalSearchScope scope = GlobalSearchScope.projectScope(project);
@@ -287,6 +466,40 @@ public class CallChainAnalyzer {
         return null;
     }
 
+    // ---- helpers ----
+
+    /**
+     * Cross-thread cancel check for workers: the task's indicator belongs to the orchestrator
+     * thread, so workers only poll the flag ({@code isCanceled}) instead of calling
+     * {@code checkCanceled()} on a foreign indicator.
+     */
+    private void checkWorkerCanceled() {
+        if (indicator != null && indicator.isCanceled()) {
+            throw new ProcessCanceledException();
+        }
+    }
+
+    private static int workerThreads() {
+        return Math.max(1, Math.min(Runtime.getRuntime().availableProcessors(), MAX_WORKER_THREADS));
+    }
+
+    private static ThreadFactory daemonFactory() {
+        AtomicInteger seq = new AtomicInteger();
+        return r -> {
+            Thread t = new Thread(r, "CallerView-worker-" + seq.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        };
+    }
+
+    private static int effectiveMaxDepth() {
+        int max = CallerViewSettings.getInstance().getMaxDepth();
+        if (max < 0 || max > MAX_ANALYSIS_DEPTH) {
+            return MAX_ANALYSIS_DEPTH;
+        }
+        return max;
+    }
+
     private static String className(PsiMethod method) {
         PsiClass c = method.getContainingClass();
         if (c instanceof PsiAnonymousClass) {
@@ -362,6 +575,41 @@ public class CallChainAnalyzer {
         node.setCoreAbove(selfOrAbove);
         for (CallNode child : node.getChildren()) {
             markCoreAbove(child, selfOrAbove);
+        }
+    }
+
+    // ---- small value types ----
+
+    /** Immutable root-to-node signature path: cycle detection without copying sets. */
+    private static final class PathNode {
+        final String signature;
+        final @Nullable PathNode parent;
+
+        PathNode(String signature, @Nullable PathNode parent) {
+            this.signature = signature;
+            this.parent = parent;
+        }
+
+        boolean contains(String sig) {
+            for (PathNode p = this; p != null; p = p.parent) {
+                if (p.signature.equals(sig)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    /** One node of the current BFS frontier: the node, its search key, and its path. */
+    private static final class LevelItem {
+        final CallNode node;
+        final CallerRef ref;
+        final PathNode path;
+
+        LevelItem(CallNode node, CallerRef ref, PathNode path) {
+            this.node = node;
+            this.ref = ref;
+            this.path = path;
         }
     }
 
