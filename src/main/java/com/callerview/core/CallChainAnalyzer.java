@@ -2,8 +2,10 @@ package com.callerview.core;
 
 import com.callerview.config.CallerViewSettings;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.progress.EmptyProgressIndicator;
 import com.intellij.openapi.progress.ProcessCanceledException;
 import com.intellij.openapi.progress.ProgressIndicator;
+import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Computable;
@@ -68,7 +70,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * would block the workers' read actions and deadlock the analysis), and short read actions
  * also let the IDE process user edits between chunks instead of freezing. Because writes can
  * now interleave with the analysis, every cached {@code PsiMethod} is re-validated with
- * {@code isValid()} before use.</p>
+ * {@code isValid()} before use. Each worker search additionally runs under a progress
+ * indicator registered with {@code ProgressManager.runProcess()}, because the platform's
+ * index searches assert being executed under one — on any thread, including pool workers.</p>
  *
  * <p>Worker count: {@code min(availableProcessors, 8)}. Index-backed searches scale
  * sub-linearly with threads (shared index read locks, read-action bookkeeping), and an
@@ -117,6 +121,7 @@ public class CallChainAnalyzer {
     private final ConcurrentHashMap<String, Boolean> coreCache = new ConcurrentHashMap<>();
     private @Nullable ExecutorService pool;
     private @Nullable ProgressIndicator indicator;
+    private @Nullable Thread orchestratorThread;
     private int nodeCount;
 
     public CallChainAnalyzer(@NotNull Project project) {
@@ -135,6 +140,7 @@ public class CallChainAnalyzer {
             DumbService.getInstance(project).waitForSmartMode();
         }
         this.indicator = indicator;
+        this.orchestratorThread = Thread.currentThread();
         this.nodeCount = 0;
         this.callerCache.clear();
         this.coreCache.clear();
@@ -282,22 +288,23 @@ public class CallChainAnalyzer {
         if (cached != null) {
             return cached;
         }
-        List<CallerRef> computed = ApplicationManager.getApplication().runReadAction((Computable<List<CallerRef>>) () -> {
-            checkWorkerCanceled();
-            List<CallerRef> result = new ArrayList<>();
-            if (target.method != null) {
-                // Writes can interleave between levels (short read actions), so re-validate.
-                if (target.method.isValid()) {
-                    findMethodCallers(target.method, result);
-                }
-            } else if (target.ownerClass != null && "<init>".equals(target.name)) {
-                if (target.ownerClass.isValid()) {
-                    findInitializerCallers(target.ownerClass, result);
-                }
-            }
-            // <clinit> stays a leaf: triggered by any class access, which is too noisy to search.
-            return result;
-        });
+        List<CallerRef> computed = runUnderProgress((Computable<List<CallerRef>>) () ->
+                ApplicationManager.getApplication().runReadAction((Computable<List<CallerRef>>) () -> {
+                    checkWorkerCanceled();
+                    List<CallerRef> result = new ArrayList<>();
+                    if (target.method != null) {
+                        // Writes can interleave between levels (short read actions), so re-validate.
+                        if (target.method.isValid()) {
+                            findMethodCallers(target.method, result);
+                        }
+                    } else if (target.ownerClass != null && "<init>".equals(target.name)) {
+                        if (target.ownerClass.isValid()) {
+                            findInitializerCallers(target.ownerClass, result);
+                        }
+                    }
+                    // <clinit> stays a leaf: triggered by any class access, which is too noisy to search.
+                    return result;
+                }));
         List<CallerRef> previous = callerCache.putIfAbsent(target.signature, computed);
         return previous != null ? previous : computed;
     }
@@ -477,6 +484,20 @@ public class CallChainAnalyzer {
         if (indicator != null && indicator.isCanceled()) {
             throw new ProcessCanceledException();
         }
+    }
+
+    /**
+     * Index-backed searches assert that the current thread runs under a progress indicator
+     * ({@code CoreProgressManager.assertUnderProgress}, enforced by {@code PsiSearchHelperImpl}).
+     * The orchestrator thread already runs under the background task's indicator, but every
+     * pool worker must register its own via {@link ProgressManager#runProcess} — otherwise the
+     * search fails with "Must be executed under progress indicator".
+     */
+    private <T> T runUnderProgress(Computable<T> computation) {
+        if (Thread.currentThread() == orchestratorThread && indicator != null) {
+            return computation.compute();
+        }
+        return ProgressManager.getInstance().runProcess(computation, new EmptyProgressIndicator());
     }
 
     private static int workerThreads() {
