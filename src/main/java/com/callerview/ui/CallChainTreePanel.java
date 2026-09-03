@@ -151,6 +151,14 @@ public class CallChainTreePanel extends JPanel {
         return null;
     }
 
+    /** "(int, String)" — the parameter list of the node, taken from its signature. */
+    private static String paramsOf(CallNode node) {
+        String sig = node.getSignature();
+        int l = sig.indexOf('(');
+        int r = sig.lastIndexOf(')');
+        return l >= 0 && r > l ? sig.substring(l, r + 1) : "";
+    }
+
     private class CallNodeRenderer extends DefaultTreeCellRenderer {
         private final Color CORE = new JBColor(0xC53030, 0xFF8A8A);
         private final Color PATH = new JBColor(0xDD6B20, 0xFFB088);
@@ -166,7 +174,10 @@ public class CallChainTreePanel extends JPanel {
                 Object u = ((DefaultMutableTreeNode) value).getUserObject();
                 if (u instanceof CallNode) {
                     CallNode n = (CallNode) u;
-                    String label = n.getShortId() + (n == root ? "  ★" : "") + (n.isTruncated() ? " …" : "");
+                    // Params must be part of the label, otherwise overloads of one class
+                    // are indistinguishable in the tree.
+                    String label = n.getShortId() + paramsOf(n)
+                            + (n == root ? "  ★" : "") + (n.isTruncated() ? " …" : "");
                     setText(label);
                     setToolTipText(n.getSignature());
                     if (!sel) {

@@ -39,24 +39,34 @@ import java.util.Set;
  * Builds the caller-chain tree for a target {@link PsiMethod} and annotates nodes/edges
  * so the UI can highlight chains that affect a configured "core" method.
  *
- * <p>Caller discovery covers the whole method hierarchy: a call through a base-class or
- * interface reference is a call to every implementing/overriding method and vice versa.
- * Calls that execute outside any method body (field initializers, static and instance
- * initializer blocks, enum constant arguments) are attributed to synthetic
- * {@code <clinit>} / {@code <init>} nodes. Method references ({@code Foo::bar}) are found
- * by the platform search. Javadoc, comment and annotation references are skipped because
- * they never execute.</p>
+ * <p>Overloads are kept apart everywhere: references are searched with the platform's
+ * <em>strict signature</em> mode (the non-strict fallback of {@link MethodReferencesSearch}
+ * accepts any reference that resolves to a same-name method of the same class, regardless
+ * of parameters, which would add spurious branches for overloaded methods), and every
+ * accepted reference is additionally checked to resolve into the target's dispatch family
+ * (the method itself, its super methods, or its overriding methods).</p>
  *
  * <p>Callers are searched within the project source scope, so calls originating from binary
  * libraries (frameworks, JDK) are inherently invisible; reflection-based invocations cannot
- * be found statically at all. Cycles (including direct and mutual recursion) are broken
- * per-branch. A hard node cap protects against runaway graphs when the depth limit is
- * -1 (unlimited).</p>
+ * be found statically at all. Calls that execute outside any method body (field initializers,
+ * static and instance initializer blocks, enum constant arguments) are attributed to synthetic
+ * {@code <clinit>} / {@code <init>} nodes; {@code <init>} expands to the enclosing methods of
+ * {@code new Owner(...)} sites, {@code <clinit>} stays a leaf because class-initializer
+ * triggers (any static access) are too noisy. Javadoc, comment and annotation references are
+ * skipped because they never execute.</p>
+ *
+ * <p>Cycles (direct, mutual and across overloads) are broken per-branch by signature. Depth is
+ * additionally capped by {@link #MAX_ANALYSIS_DEPTH} so the recursive build — and the recursive
+ * UI code that consumes the tree — can never overflow the thread stack, even with the depth
+ * setting at -1 (unlimited).</p>
  */
 public class CallChainAnalyzer {
 
     /** Safety net so an "unlimited" analysis cannot freeze the IDE on pathological graphs. */
     private static final int SAFETY_NODE_CAP = 20000;
+
+    /** Hard ceiling on chain depth: protects the Java stack of the recursive build and UI. */
+    private static final int MAX_ANALYSIS_DEPTH = 1000;
 
     private final @NotNull Project project;
     private int nodeCount;
@@ -99,7 +109,10 @@ public class CallChainAnalyzer {
         nodeCount++;
 
         int max = CallerViewSettings.getInstance().getMaxDepth();
-        boolean canExpand = (max < 0 || depth < max) && nodeCount < SAFETY_NODE_CAP;
+        if (max < 0 || max > MAX_ANALYSIS_DEPTH) {
+            max = MAX_ANALYSIS_DEPTH;
+        }
+        boolean canExpand = depth < max && nodeCount < SAFETY_NODE_CAP;
 
         if (canExpand) {
             ancestors.add(target.signature); // current node is on the path for its callers
@@ -107,7 +120,7 @@ public class CallChainAnalyzer {
             Set<String> seen = new HashSet<>();
             for (CallerRef caller : callers) {
                 if (!seen.add(caller.signature) || ancestors.contains(caller.signature)) {
-                    continue; // duplicate / cycle
+                    continue; // duplicate / cycle (direct, mutual, or across overloads)
                 }
                 node.addChild(build(caller, depth + 1, ancestors, indicator));
             }
@@ -120,16 +133,29 @@ public class CallChainAnalyzer {
 
     private List<CallerRef> findCallers(CallerRef target) {
         List<CallerRef> result = new ArrayList<>();
-        PsiMethod method = target.method;
-        if (method == null) {
-            return result; // synthetic initializer nodes: nothing in user code invokes them
+        if (target.method != null) {
+            findMethodCallers(target.method, result);
+        } else if (target.ownerClass != null && "<init>".equals(target.name)) {
+            findInitializerCallers(target.ownerClass, result);
         }
+        // <clinit> stays a leaf: it is triggered by any class access, which is too noisy to search.
+        return result;
+    }
+
+    private void findMethodCallers(PsiMethod method, List<CallerRef> result) {
         GlobalSearchScope scope = GlobalSearchScope.projectScope(project);
         for (final PsiMethod m : hierarchySearchMethods(method)) {
-            MethodReferencesSearch.search(m, scope, false).forEach(reference -> {
+            // true = strict signature search. With false the searcher also accepts references
+            // that merely resolve to a same-name method of the same class — every overload call
+            // would then be reported as a call of the target (spurious extra branches).
+            MethodReferencesSearch.search(m, scope, true).forEach(reference -> {
                 PsiElement element = reference.getElement();
                 if (isNonExecutableReference(element)) {
                     return true; // javadoc / comment / annotation links never execute
+                }
+                PsiMethod resolved = resolveToMethod(reference);
+                if (resolved != null && !isInDispatchFamily(resolved, method)) {
+                    return true; // call to a different overload or a sibling override
                 }
                 PsiMethod caller = PsiTreeUtil.getParentOfType(element, PsiMethod.class);
                 if (caller != null) {
@@ -146,7 +172,29 @@ public class CallChainAnalyzer {
                 return true;
             });
         }
-        return result;
+    }
+
+    /** Field-initializer code runs inside every constructor, so any {@code new Owner(...)} site is a caller. */
+    private void findInitializerCallers(PsiClass owner, List<CallerRef> result) {
+        GlobalSearchScope scope = GlobalSearchScope.projectScope(project);
+        for (final PsiMethod ctor : owner.getConstructors()) {
+            MethodReferencesSearch.search(ctor, scope, true).forEach(reference -> {
+                PsiElement element = reference.getElement();
+                if (isNonExecutableReference(element)) {
+                    return true;
+                }
+                PsiMethod caller = PsiTreeUtil.getParentOfType(element, PsiMethod.class);
+                if (caller != null && !caller.isEquivalentTo(ctor)) {
+                    result.add(CallerRef.of(caller));
+                } else if (caller == null) {
+                    CallerRef pseudo = initializerCaller(element);
+                    if (pseudo != null) {
+                        result.add(pseudo);
+                    }
+                }
+                return true;
+            });
+        }
     }
 
     /**
@@ -174,12 +222,39 @@ public class CallChainAnalyzer {
         return methods;
     }
 
+    /**
+     * True when {@code resolved} is the target itself or shares its override slot (one of them
+     * overrides the other). A call resolves to the target's dispatch slot only in that case;
+     * same-name overloads and sibling overrides in a subclass never dispatch to the target.
+     */
+    private static boolean isInDispatchFamily(PsiMethod resolved, PsiMethod target) {
+        if (resolved.isEquivalentTo(target)) {
+            return true;
+        }
+        for (PsiMethod s : resolved.findSuperMethods()) {
+            if (s.isEquivalentTo(target)) {
+                return true; // resolved overrides the target (call through a subtype reference)
+            }
+        }
+        for (PsiMethod s : target.findSuperMethods()) {
+            if (s.isEquivalentTo(resolved)) {
+                return true; // the target overrides resolved (call through a base reference)
+            }
+        }
+        return false;
+    }
+
     private static boolean canBeOverridden(PsiMethod method, PsiClass cls) {
         return !method.isConstructor()
                 && !method.hasModifierProperty(PsiModifier.PRIVATE)
                 && !method.hasModifierProperty(PsiModifier.STATIC)
                 && !method.hasModifierProperty(PsiModifier.FINAL)
                 && !cls.hasModifierProperty(PsiModifier.FINAL);
+    }
+
+    private static @Nullable PsiMethod resolveToMethod(PsiReference reference) {
+        PsiElement resolved = reference.resolve();
+        return resolved instanceof PsiMethod ? (PsiMethod) resolved : null;
     }
 
     /** Javadoc, comment and annotation references point at the method but never invoke it. */
@@ -293,13 +368,20 @@ public class CallChainAnalyzer {
     /** A discovered caller: a real {@link PsiMethod}, or a synthetic node for class initialization code. */
     private static final class CallerRef {
         final @Nullable PsiMethod method;
+        final @Nullable PsiClass ownerClass; // only for synthetic initializer nodes
         final String name;
         final String className;
         final String fqn;
         final String signature;
 
-        private CallerRef(@Nullable PsiMethod method, String name, String className, String fqn, String signature) {
+        private CallerRef(@Nullable PsiMethod method,
+                          @Nullable PsiClass ownerClass,
+                          String name,
+                          String className,
+                          String fqn,
+                          String signature) {
             this.method = method;
+            this.ownerClass = ownerClass;
             this.name = name;
             this.className = className;
             this.fqn = fqn;
@@ -307,16 +389,18 @@ public class CallChainAnalyzer {
         }
 
         static CallerRef of(PsiMethod method) {
-            return new CallerRef(method, method.getName(), className(method), fqn(method), signature(method));
+            return new CallerRef(method, null, method.getName(), className(method), fqn(method), signature(method));
         }
 
         /** Synthetic caller for calls that execute while the class is being initialized. */
         static CallerRef initializer(PsiClass owner, boolean isStatic) {
             String name = isStatic ? "<clinit>" : "<init>";
-            String clsName = owner.getName() != null ? owner.getName() : "(anonymous)";
+            String clsName = owner instanceof PsiAnonymousClass
+                    ? anonymousLabel((PsiAnonymousClass) owner)
+                    : (owner.getName() != null ? owner.getName() : "(anonymous)");
             String q = owner.getQualifiedName();
             String base = q != null ? q : uniqueFallback(owner);
-            return new CallerRef(null, name, clsName, q != null ? q : clsName, base + "." + name + "()");
+            return new CallerRef(null, owner, name, clsName, q != null ? q : clsName, base + "." + name + "()");
         }
     }
 }
