@@ -87,10 +87,7 @@ and `https://cache-redirector.jetbrains.com/intellij-dependencies` (large, pleas
 
 ### From the Marketplace
 
-Upload `CallerView-1.0.0.zip` (or a signed release) to [JetBrains Marketplace](https://plugins.jetbrains.com/). Publishing requires:
-
-1. Generate a plugin signing key pair in your [account](https://plugins.jetbrains.com/author/me);
-2. (Optional) configure a signing certificate and repackage with Maven, or complete dual signing on the Marketplace.
+Upload `CallerView-1.0.0.zip` (or a signed release) to [JetBrains Marketplace](https://plugins.jetbrains.com/). 
 
 ## Usage
 

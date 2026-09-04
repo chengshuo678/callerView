@@ -85,10 +85,7 @@ mvn clean package
 ### 从插件市场安装
 
 将 `CallerView-1.0.0.zip`（或签名后的发布包）上传到
-[JetBrains Marketplace](https://plugins.jetbrains.com/)。上架需：
-
-1. 在 [账户](https://plugins.jetbrains.com/author/me) 生成插件签名密钥对；
-2. （可选）配置签名证书后用 Maven 重新打包，或在 Marketplace 上完成双重签名。
+[JetBrains Marketplace](https://plugins.jetbrains.com/)。
 
 ## 使用
 
