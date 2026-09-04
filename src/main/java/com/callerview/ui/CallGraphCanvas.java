@@ -276,8 +276,8 @@ public class CallGraphCanvas extends JComponent {
                 Font f = g2.getFont().deriveFont(Font.PLAIN, 14f);
                 g2.setFont(f);
                 FontMetrics fm = g2.getFontMetrics(f);
-                String msg = "右键某个方法 → CallerView: Show Call Chain";
-                String msg2 = "右键方法后，调用链将在此处以图形方式展示。";
+                String msg = "Right-click a method → CallerView: Show Call Chain";
+                String msg2 = "The caller chain of that method will be visualized here.";
                 int w = Math.max(fm.stringWidth(msg), fm.stringWidth(msg2));
                 int x = (getWidth() - w) / 2;
                 int y = getHeight() / 2 - fm.getHeight();
@@ -418,8 +418,8 @@ public class CallGraphCanvas extends JComponent {
         g2.setFont(font);
 
         String[] lines = {
-                "◆ 目标方法(★)在左 · 向右逐级为其调用者  ⟶ 子调用父",
-                "■ 红色 = 影响核心方法的链路    缩放 " + Math.round(zoom * 100) + "%"
+                "◆ Target method (★) on the left · callers extend to the right  ⟶ child calls parent",
+                "■ Red = chains affecting a core method    Zoom " + Math.round(zoom * 100) + "%"
         };
         int boxW = 0;
         for (String l : lines) {

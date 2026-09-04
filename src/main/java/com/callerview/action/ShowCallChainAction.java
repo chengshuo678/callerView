@@ -44,7 +44,7 @@ public class ShowCallChainAction extends AnAction {
         final PsiMethod method = resolveMethod(e);
         if (method == null) {
             LOG.info("CallerView: no method resolved at the caret");
-            Messages.showInfoMessage("当前光标位置没有找到方法。\n请将光标置于某个方法内部后重试。", "CallerView");
+            Messages.showInfoMessage("No method found at the caret.\nPlace the caret inside a method and try again.", "CallerView");
             return;
         }
         String host = method.getContainingClass() == null

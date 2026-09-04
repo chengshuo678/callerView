@@ -135,7 +135,7 @@ public class CallChainAnalyzer {
         // Searching while indices are updating silently returns incomplete results.
         if (DumbService.isDumb(project)) {
             if (indicator != null) {
-                indicator.setText("CallerView: 等待索引更新完成…");
+                indicator.setText("CallerView: waiting for index update to finish…");
             }
             DumbService.getInstance(project).waitForSmartMode();
         }
@@ -176,7 +176,7 @@ public class CallChainAnalyzer {
         while (!frontier.isEmpty()) {
             if (indicator != null) {
                 indicator.checkCanceled();
-                indicator.setText("CallerView: 深度 " + frontier.get(0).node.getDepth() + "，节点 " + nodeCount);
+                indicator.setText("CallerView: depth " + frontier.get(0).node.getDepth() + ", nodes " + nodeCount);
             }
             if (nodeCount >= SAFETY_NODE_CAP) {
                 for (LevelItem item : frontier) {

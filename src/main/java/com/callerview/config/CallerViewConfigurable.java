@@ -20,11 +20,11 @@ import java.util.List;
 public class CallerViewConfigurable implements Configurable {
 
     private static final String HINT =
-            "<html>示例 (每行一个, 匹配的链路将被标红):<br>" +
-            "&nbsp;&nbsp;ClassName.methodName&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;该方法的<b>全部重载</b>都匹配<br>" +
-            "&nbsp;&nbsp;ClassName.methodName(int)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;只匹配参数为 int 的<b>这一个重载</b><br>" +
-            "&nbsp;&nbsp;com.foo.ClassName.methodName(int, String)&nbsp;&nbsp;完整签名, 精确匹配单个重载<br>" +
-            "&nbsp;&nbsp;(参数类型按图中显示的名称填写, 如 String / int / List&lt;String&gt;)</html>";
+            "<html>Examples (one per line; matching chains are highlighted in red):<br>" +
+            "&nbsp;&nbsp;ClassName.methodName&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;matches <b>all overloads</b> of the method<br>" +
+            "&nbsp;&nbsp;ClassName.methodName(int)&nbsp;&nbsp;&nbsp;matches <b>only</b> the overload with an int parameter<br>" +
+            "&nbsp;&nbsp;com.foo.ClassName.methodName(int, String)&nbsp;&nbsp;full signature, exact match of a single overload<br>" +
+            "&nbsp;&nbsp;(write parameter types as displayed in the graph, e.g. String / int / List&lt;String&gt;)</html>";
 
     private JPanel panel;
     private JSpinner depthSpinner;
@@ -40,9 +40,9 @@ public class CallerViewConfigurable implements Configurable {
         gbc.anchor = GridBagConstraints.WEST;
         gbc.fill = GridBagConstraints.HORIZONTAL;
 
-        JLabel depthLabel = new JLabel("向上分析层级 (depth, -1 = 全部):");
+        JLabel depthLabel = new JLabel("Upward analysis depth (-1 = unlimited):");
         depthSpinner = new JSpinner(new SpinnerNumberModel(-1, -1, Integer.MAX_VALUE, 1));
-        depthSpinner.setToolTipText("-1 表示向上遍历所有层级");
+        depthSpinner.setToolTipText("-1 means traverse all levels upward");
 
         gbc.gridx = 0;
         gbc.gridy = 0;
@@ -59,7 +59,7 @@ public class CallerViewConfigurable implements Configurable {
         gbc.weighty = 1;
         gbc.anchor = GridBagConstraints.NORTHWEST;
         gbc.fill = GridBagConstraints.VERTICAL;
-        JLabel coreLabel = new JLabel("核心方法 (每行一个):");
+        JLabel coreLabel = new JLabel("Core methods (one per line):");
         panel.add(coreLabel, gbc);
 
         gbc.gridx = 1;

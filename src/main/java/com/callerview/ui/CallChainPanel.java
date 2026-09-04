@@ -61,9 +61,9 @@ public class CallChainPanel extends JPanel {
         tb.setFloatable(false);
         tb.setBorderPainted(false);
         tb.add(new JLabel("CallerView  "));
-        tb.add(button("放大", e -> canvas.zoomIn()));
-        tb.add(button("缩小", e -> canvas.zoomOut()));
-        tb.add(button("重置视图", e -> canvas.resetView()));
+        tb.add(button("Zoom In", e -> canvas.zoomIn()));
+        tb.add(button("Zoom Out", e -> canvas.zoomOut()));
+        tb.add(button("Reset View", e -> canvas.resetView()));
         tb.add(Box.createHorizontalGlue());
         infoLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
         tb.add(infoLabel);
@@ -83,7 +83,7 @@ public class CallChainPanel extends JPanel {
         if (method == null) {
             return;
         }
-        infoLabel.setText("分析中…");
+        infoLabel.setText("Analyzing…");
         infoLabel.repaint();
 
         ProgressManager.getInstance().run(new Task.Backgroundable(project, "CallerView: analyzing callers", true) {
@@ -120,17 +120,17 @@ public class CallChainPanel extends JPanel {
         canvas.setRoot(root);
         tree.setRoot(root);
         if (error != null) {
-            infoLabel.setText("分析失败: " + error);
+            infoLabel.setText("Analysis failed: " + error);
             return;
         }
         if (root == null) {
-            infoLabel.setText("无结果");
+            infoLabel.setText("No results");
             return;
         }
         int count = countNodes(root);
-        String text = "目标: " + root.getShortId() + "    节点数: " + count;
+        String text = "Target: " + root.getShortId() + "    Nodes: " + count;
         if (hasTruncated(root)) {
-            text += "    （部分调用链因深度/规模限制被截断）";
+            text += "    (some chains truncated by depth/size limits)";
         }
         infoLabel.setText(text);
     }
