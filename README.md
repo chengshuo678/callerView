@@ -1,41 +1,45 @@
 # CallerView
 
-IntelliJ IDEA 插件：分析并可视化一个 Java 方法的 **被调用链路（向上查找 caller）**。
-右键某个方法 → `CallerView: Show Call Chain`，即可在图形 + 侧边树中查看完整的调用链路，
-并标红所有会影响到“核心方法”的链路。
+IntelliJ IDEA plugin that analyzes and visualizes the **caller chain (searching upward)** of a Java method.
+Right-click any method → `CallerView: Show Call Chain` to see the full call chain in a graph plus a side tree,
+with every chain that affects a configured **core method** highlighted in red.
 
-> 技术栈：Java 8 + Maven，仅依赖 IntelliJ Platform 模块构件（`com.jetbrains.intellij.platform:core`
-> 与 `com.jetbrains.intellij.java:java`，`provided` 作用域），无任何第三方 jar。
+> Tech stack: Java 8 + Maven, depending only on IntelliJ Platform module artifacts
+> (`com.jetbrains.intellij.platform:core` and `com.jetbrains.intellij.java:java`, `provided` scope),
+> with no third-party jars.
 
-## 功能一览
+## Features
 
-1. **右键方法查看调用链**：在编辑器中右键 → `CallerView: Show Call Chain`，定位光标处方法并向上展开所有调用者。
-2. **可配置向上层级**：`Settings | Tools | CallerView` → “向上分析层级”，默认 `-1`（全部）；超过层级或节点上限（安全阀 20000）处显示截断标记。
-3. **可配置核心方法**：同页“核心方法（每行一个）”，支持 `ClassName.methodName` 或 FQN 子串匹配；任一链路包含/影响核心方法时，该链路（节点 + 连线）**标红**。
-4. **图形展示**：纯 Java2D 横向 tidy-tree 布局，目标方法（★）在左、调用者向右延伸；支持滚轮缩放（光标锚定）、拖拽平移、点击选中、双击跳转、自适应视图。
-5. **侧边树面板**：与图形同步镜像调用链，核心/受影响路径红色高亮，与图形双向选中联动，双击跳转源码。
-6. **本地安装 / 上架市场**：`mvn package` 直接产出可安装的 `target/CallerView-1.0.0.zip`。
+1. **Right-click a method to view its caller chain**: in the editor, right-click → `CallerView: Show Call Chain`; it locates the method at the caret and expands all of its callers upward.
+2. **Configurable upward depth**: `Settings | Tools | CallerView` → "Upward analysis depth", default `-1` (all levels); beyond the depth limit or the node cap (safety valve 20000) a truncated marker is shown.
+3. **Configurable core methods**: on the same page, "Core methods (one per line)"; supports `ClassName.methodName` or FQN-substring matching; whenever a chain contains/affects a core method, that chain (nodes + edges) is **highlighted in red**.
+4. **Graph view**: pure Java2D horizontal tidy-tree layout; the target method (★) is on the left and callers extend to the right; supports wheel zoom (anchored to the cursor), drag to pan, click to select, double-click to jump, and fit-to-view.
+5. **Side tree panel**: mirrors the call chain in sync with the graph; core/affected paths are highlighted in red, bidirectionally linked selection with the graph, and double-click to jump to source.
+6. **Local install / Marketplace upload**: `mvn package` directly produces an installable `target/CallerView-1.0.0.zip`.
 
-## 兼容性
+## Compatibility
 
-- 编译目标 `1.8`，SDK 选用 IntelliJ 2020.3（最后一个内置 JBR 8 的平台）。
-- `plugin.xml` 中 `<idea-version since-build="203"/>`，不设 `until-build`，配合稳定 API（`AnAction`、`ToolWindow`、`PersistentStateComponent`、`PsiMethod`、`MethodReferencesSearch`、纯 Swing/AWT 绘图），
-  生成的 Java 8 字节码可运行于 2020.3 及以后的所有 IDE（已验证平台构件 `core`/`java` 在 `203.7148.57` 同时存在）。
-- 上架市场前建议用 [Plugin Verifier](https://plugins.jetbrains.com/docs/intellij/verifying-plugin-compatibility.html) 对目标版本范围再核验一次。
+- Compile target is `1.8`, built against the IntelliJ 2020.3 SDK (the last Platform that bundles JBR 8).
+- `plugin.xml` sets `<idea-version since-build="203"/>` with no `until-build`; combined with stable APIs
+  (`AnAction`, `ToolWindow`, `PersistentStateComponent`, `PsiMethod`, `MethodReferencesSearch`, plain Swing/AWT drawing),
+  the generated Java 8 bytecode runs on 2020.3 and all later IDEs (verified that the platform artifacts
+  `core`/`java` exist together at `203.7148.57`).
+- Before publishing to the Marketplace it is recommended to re-verify the target version range with
+  [Plugin Verifier](https://plugins.jetbrains.com/docs/intellij/verifying-plugin-compatibility.html).
 
-## 目录结构
+## Project Layout
 
 ```
 callerView/
 ├── pom.xml
-├── src/assembly/plugin.xml                 # 把 target/CallerView.jar 打成 CallerView/lib/CallerView.jar 的 zip
+├── src/assembly/plugin.xml                 # Packs target/CallerView.jar into a CallerView/lib/CallerView.jar zip
 └── src/main/
     ├── resources/
     │   ├── META-INF/
-    │   │   ├── plugin.xml                  # 插件描述、依赖、扩展、右键 Action
-    │   │   ├── pluginIcon.svg              # 市场/本地安装图标（亮色）
-    │   │   └── pluginIcon_dark.svg         # 暗色
-    │   └── icons/callChain.svg             # Action / 工具窗口图标
+    │   │   ├── plugin.xml                  # Plugin descriptor, dependencies, extensions, editor popup action
+    │   │   ├── pluginIcon.svg              # Marketplace / local-install icon (light)
+    │   │   └── pluginIcon_dark.svg         # Dark
+    │   └── icons/callChain.svg             # Action / tool-window icon
     └── java/com/callerview/
         ├── CallerViewIcons.java
         ├── core/        CallNode, CallChainAnalyzer
@@ -45,27 +49,26 @@ callerView/
         └── toolwindow/  CallChainViewService, CallChainToolWindowFactory
 ```
 
-## 构建
+## Building
 
-环境要求：JDK 8（或更新，编译目标固定 1.8）+ Maven 3.6+。
+Requirements: JDK 8 (or newer; compile target is fixed to 1.8) + Maven 3.6+.
 
 ```bash
 mvn clean package
 ```
 
-首次构建会从 `https://www.jetbrains.com/intellij-repository/releases` 与
-`https://cache-redirector.jetbrains.com/intellij-dependencies` 下载平台构件（较大，请耐心等待）。
-产物：
+The first build downloads the platform artifacts from `https://www.jetbrains.com/intellij-repository/releases`
+and `https://cache-redirector.jetbrains.com/intellij-dependencies` (large, please be patient). Artifacts:
 
-- `target/CallerView.jar`（插件本体，内含 `META-INF/plugin.xml` 与图标）
-- `target/CallerView-1.0.0.zip`（可直接安装的分发包，结构为 `CallerView/lib/CallerView.jar`）
+- `target/CallerView.jar` (the plugin itself, containing `META-INF/plugin.xml` and the icons)
+- `target/CallerView-1.0.0.zip` (the directly installable distribution, structured as `CallerView/lib/CallerView.jar`)
 
-> zip 必须带顶层 `CallerView/` 目录：IDEA 安装时把 zip 的第一个顶层条目当作插件目录，
-> 缺少该目录会报 “Fail to load plugin descriptor from file”。
+> The zip must keep its top-level `CallerView/` directory: IDEA treats the zip's first top-level entry as the plugin
+> directory, and without it you get "Fail to load plugin descriptor from file".
 
-> 若编译期出现“package xxx does not exist”，说明个别类所在平台模块未被 `core`/`java` 传递引入，
-> 可在 `pom.xml` 的 `<dependencies>` 中补一个模块构件（坐标规则见
-> [IntelliJ Artifacts 文档](https://plugins.jetbrains.com/docs/intellij/intellij-artifacts.html)），例如：
+> If compilation reports "package xxx does not exist", the platform module containing a given class is not pulled in
+> transitively by `core`/`java`. Add the module artifact to `<dependencies>` in `pom.xml` (coordinate rules are in the
+> [IntelliJ Artifacts doc](https://plugins.jetbrains.com/docs/intellij/intellij-artifacts.html)), for example:
 >
 > ```xml
 > <dependency>
@@ -76,35 +79,38 @@ mvn clean package
 > </dependency>
 > ```
 
-## 安装
+## Installation
 
-### 本地安装
+### Local install
 
-`File | Settings | Plugins | ⚙ | Install Plugin from Disk…` → 选择 `target/CallerView-1.0.0.zip` → 重启 IDE。
+`File | Settings | Plugins | ⚙ | Install Plugin from Disk…` → select `target/CallerView-1.0.0.zip` → restart the IDE.
 
-### 从插件市场安装
+### From the Marketplace
 
-将 `CallerView-1.0.0.zip`（或签名后的发布包）上传到
-[JetBrains Marketplace](https://plugins.jetbrains.com/)。上架需：
+Upload `CallerView-1.0.0.zip` (or a signed release) to [JetBrains Marketplace](https://plugins.jetbrains.com/). Publishing requires:
 
-1. 在 [账户](https://plugins.jetbrains.com/author/me) 生成插件签名密钥对；
-2. （可选）配置签名证书后用 Maven 重新打包，或在 Marketplace 上完成双重签名。
+1. Generate a plugin signing key pair in your [account](https://plugins.jetbrains.com/author/me);
+2. (Optional) configure a signing certificate and repackage with Maven, or complete dual signing on the Marketplace.
 
-## 使用
+## Usage
 
-1. 打开任意 Java 工程。
-2. 把光标放到某个方法体内（或选中方法名）。
-3. 右键 → `CallerView: Show Call Chain`。
-4. 底部 `CallerView` 工具窗口出现：左侧图形、右侧树，二者联动。
-   - 图形：滚轮缩放、空白处拖拽平移、点击选中、双击跳转到源码、工具栏「放大/缩小/重置视图」。
-   - 树：单击选中（图形同步）、双击跳转、自动展开整棵链路。
-5. 在 `Settings | Tools | CallerView` 调整层级与核心方法；核心方法命中后相关链路自动标红。
+1. Open any Java project.
+2. Place the caret inside a method body (or select the method name).
+3. Right-click → `CallerView: Show Call Chain`.
+4. The `CallerView` tool window opens at the bottom: graph on the left, tree on the right, and the two stay in sync.
+   - Graph: wheel to zoom, drag on empty space to pan, click to select, double-click to jump to source, and toolbar
+     `Zoom In / Zoom Out / Reset View`.
+   - Tree: click to select (slaved to the graph), double-click to jump, auto-expands the whole chain.
+5. Adjust depth and core methods in `Settings | Tools | CallerView`; once a core method is matched, the affected chains turn red automatically.
 
-## 说明与限制
+## Notes & Limitations
 
-- 调用者检索范围为**工程源码**（`GlobalSearchScope.projectScope`，含测试源）；
-- 循环（含直接/间接递归）按分支打破，同一方法可在不同分支重复出现以保留完整路径信息。
-- 默认 `-1` 表示无限层级，受安全节点上限 20000 保护；超大调用图建议显式设置层级。
-- 存储的 `PsiMethod` 用于双击跳转，PSI 变更后若失效会自动忽略跳转。
-- **无法覆盖的场景（静态分析的固有限制）**：反射调用、XML/配置文件驱动的框架调用（Spring、MyBatis 等）、二进制依赖库内部发起的回调（搜索范围是项目源码）、以及动态分发导致的歧义（接口调用具体走哪个实现只在运行时确定）。
-
+- The caller search is scoped to the **project sources** (`GlobalSearchScope.projectScope`, test sources included);
+- Cycles (including direct/indirect recursion) are broken per branch; the same method may appear repeatedly in
+  different branches to preserve the full path information.
+- The default `-1` means unlimited depth, guarded by the 20000-node safety cap; set an explicit depth for very large call graphs.
+- The stored `PsiMethod` is used for double-click navigation; a jump is silently skipped once the PSI becomes invalid after edits.
+- **Scenarios static analysis cannot cover**: reflection calls, framework calls driven by XML/config files
+  (Spring, MyBatis, etc.), callbacks originating inside binary dependency libraries (the search scope is the
+  project sources), and the ambiguity of dynamic dispatch (which implementation an interface call resolves to is
+  only known at runtime).
